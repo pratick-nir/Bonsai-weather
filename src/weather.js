@@ -24,6 +24,14 @@ export function phaseLabel(min, sr, ss) {
   return 'Daylight';
 }
 
+// Growth score per weather condition (0 = hostile, 1 = perfect)
+const GROWTH_SCORE = { clear: 1.0, partly: 0.85, cloudy: 0.6, fog: 0.4, rain: 0.25, storm: 0.1, snow: 0.1 };
+const PRESET_GROWTH = { clear: 1.0, partly: 0.85, golden: 0.9, cloudy: 0.6, rain: 0.25, storm: 0.1, snow: 0.1, windy: 0.8, hot: 0.4, night: 0.75 };
+function weeklyGrowthScore(weekly) {
+  if (!weekly || !weekly.length) return 0.75;
+  return weekly.reduce((s, d) => s + (GROWTH_SCORE[d.condition] ?? 0.5), 0) / weekly.length;
+}
+
 // Open-Meteo weather codes -> conditions the tree understands
 function codeToCondition(code) {
   if (code >= 95) return 'storm';
@@ -67,8 +75,8 @@ export async function fetchWeather(place) {
     'https://api.open-meteo.com/v1/forecast?latitude=' + place.latitude + '&longitude=' + place.longitude +
     '&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m' +
     '&hourly=temperature_2m,weather_code,wind_speed_10m,precipitation_probability' +
-    '&daily=sunrise,sunset,uv_index_max,temperature_2m_max,temperature_2m_min' +
-    '&timezone=auto&forecast_days=2';
+    '&daily=sunrise,sunset,uv_index_max,temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max' +
+    '&timezone=auto&forecast_days=7';
   const j = await (await fetch(url)).json();
 
   const nowIso = j.current.time;              // local time at the place
@@ -103,6 +111,14 @@ export async function fetchWeather(place) {
   else if (nowMin <= ss) goldenText = 'Happening now, ends in ' + dur(ss - nowMin);
   else goldenText = 'Next one tomorrow';
 
+  const weekly = j.daily.time.map((date, i) => ({
+    date,
+    condition: codeToCondition(j.daily.weather_code[i]),
+    hi: j.daily.temperature_2m_max[i],
+    lo: j.daily.temperature_2m_min[i],
+    pop: j.daily.precipitation_probability_max ? j.daily.precipitation_probability_max[i] : null,
+  }));
+
   return {
     label: place.label,
     condition: codeToCondition(j.current.weather_code),
@@ -111,7 +127,8 @@ export async function fetchWeather(place) {
     uv: Math.round(j.daily.uv_index_max[di]),
     hi: j.daily.temperature_2m_max[di], lo: j.daily.temperature_2m_min[di],
     sunrise: fmt(sr), sunset: fmt(ss), srMin: sr, ssMin: ss, nowMin,
-    mood: moodAt(nowMin, sr, ss), hourly,
+    mood: moodAt(nowMin, sr, ss), hourly, weekly,
+    growth: weeklyGrowthScore(weekly),
     goldenStart: fmt(ss - 60), goldenEnd: fmt(ss), goldenText,
   };
 }
@@ -149,11 +166,19 @@ export function getPreset(key) {
     });
   }
   const nowMin = o.now;
+  const weekly = Array.from({ length: 7 }, (_, i) => ({
+    date: 'sim-' + i,
+    condition: i === 0 ? o.condition : ['clear', 'partly', 'cloudy', 'rain', 'clear', 'partly', 'clear'][i],
+    hi: Math.round(o.temp + 3 + (Math.random() * 4 - 2)),
+    lo: Math.round(o.temp - 5 + (Math.random() * 4 - 2)),
+    pop: POP[key],
+  }));
   return {
     label: 'Simulation', condition: o.condition, temp: o.temp, feels: o.temp - 1, wind: o.wind,
     humidity: o.humidity, uv: o.uv, hi: o.temp + 3, lo: o.temp - 5,
     sunrise: fmt(SR), sunset: fmt(SS), srMin: SR, ssMin: SS, nowMin,
-    mood: moodAt(nowMin, SR, SS), hourly,
+    mood: moodAt(nowMin, SR, SS), hourly, weekly,
+    growth: PRESET_GROWTH[key] ?? 0.75,
     goldenStart: fmt(SS - 60), goldenEnd: fmt(SS),
     goldenText: nowMin < SS - 60 ? 'Starts in ' + dur(SS - 60 - nowMin)
       : nowMin <= SS ? 'Happening now, ends in ' + dur(SS - nowMin) : 'Next one tomorrow',

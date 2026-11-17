@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, ScrollView, StyleSheet, Switch, Text, View, useWindowDimensions } from 'react-native';
+import { Animated, Easing, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFonts, SpaceGrotesk_500Medium, SpaceGrotesk_600SemiBold } from '@expo-google-fonts/space-grotesk';
@@ -8,6 +8,7 @@ import { PlusJakartaSans_400Regular } from '@expo-google-fonts/plus-jakarta-sans
 import BonsaiView from './src/BonsaiView';
 import GlassCard, { Button, FilterChip, MoodChip, SearchBar, ThemeToggle } from './src/GlassCard';
 import HourlyStrip from './src/HourlyStrip';
+import WeeklyForecast from './src/WeeklyForecast';
 import SolarArc from './src/SolarArc';
 import WeatherIcon from './src/WeatherIcon';
 import { locateMe, searchPlace, fetchWeather, getPreset, MODES, CONDITION_LABEL } from './src/weather';
@@ -36,6 +37,8 @@ function Root() {
   const [live, setLive] = useState(null);
   const [sel, setSel] = useState(null);              // chosen hour (null = now)
   const [err, setErr] = useState('');
+  const [treeStage, setTreeStage] = useState(null);  // null = live, 0-6 = frozen day stage
+  const bonsaiRef = useRef(null);
   const progress = useRef(new Animated.Value(0)).current; // 0 = intro, 1 = hero
   const pulse = useRef(new Animated.Value(0.4)).current;
   const started = useRef(false);
@@ -62,6 +65,21 @@ function Root() {
   };
   useEffect(() => { const timer = setTimeout(goHero, 9000); return () => clearTimeout(timer); }, []); // safety net
 
+  const handleStageSelect = (day) => {
+    if (treeStage === day) {
+      // tap same day again = unfreeze, resume live animation
+      setTreeStage(null);
+      bonsaiRef.current?.clearStage();
+    } else {
+      setTreeStage(day);
+      bonsaiRef.current?.setStage(day);
+    }
+  };
+  const handleReset = () => {
+    setTreeStage(null);
+    bonsaiRef.current?.reset();
+  };
+
   const data = useMemo(() => (liveOn && live ? live : getPreset(liveOn ? 'clear' : presetKey)), [liveOn, live, presetKey]);
   useEffect(() => { setSel(null); }, [data]);
 
@@ -86,7 +104,8 @@ function Root() {
       {/* The 3D bonsai stays mounted and only moves and scales */}
       <Animated.View style={[styles.tree, { height: treeH, transform: [{ translateY: treeY }, { scale: treeScale }] }]}>
         <BonsaiView
-          climate={{ condition: climate.condition, temp: climate.temp, wind: climate.wind, mood: climate.mood, light: mode === 'light' }}
+          ref={bonsaiRef}
+          climate={{ condition: climate.condition, temp: climate.temp, wind: climate.wind, mood: climate.mood, light: mode === 'light', growth: data.growth }}
           onDone={goHero}
         />
       </Animated.View>
@@ -113,6 +132,38 @@ function Root() {
           {!!err && <Text style={[type.bodySm, { color: t.err, marginTop: 4 }]}>{err}</Text>}
         </View>
 
+        {/* 7-day growth stage strip — overlaid at the bottom of the tree area */}
+        {phase === 'hero' && (
+          <View style={[styles.stageBar, { top: TOP + treeH - 38 }]} pointerEvents="box-none">
+            <View style={styles.stageRow}>
+              {(data.weekly || []).slice(0, 7).map((day, i) => (
+                <TouchableOpacity
+                  key={day.date}
+                  onPress={() => handleStageSelect(i)}
+                  activeOpacity={0.75}
+                  style={[
+                    styles.stageChip,
+                    { backgroundColor: t.chip.bg, borderColor: t.chip.border },
+                    treeStage === i && { backgroundColor: t.accent, borderColor: t.accent },
+                  ]}
+                >
+                  <Text style={[type.labelSm, { color: treeStage === i ? t.onAccent : t.soft }]}>
+                    {i + 1}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+              {/* Reset button — replays grow animation from seed */}
+              <TouchableOpacity
+                onPress={handleReset}
+                activeOpacity={0.75}
+                style={[styles.stageChip, styles.resetChip, { backgroundColor: t.chip.bg, borderColor: t.chip.border }]}
+              >
+                <Text style={{ color: t.soft, fontSize: 16, lineHeight: 18 }}>↺</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
         <ScrollView style={{ marginTop: TOP + treeH }} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <Text style={[type.display, { color: t.text }]}>{Math.round(climate.temp)}°</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -133,6 +184,9 @@ function Root() {
 
           <Text style={[type.labelSm, styles.section, { color: t.soft }]}>Hourly</Text>
           <HourlyStrip hours={data.hourly} sel={sel} onSelect={setSel} srMin={data.srMin} ssMin={data.ssMin} />
+
+          <Text style={[type.labelSm, styles.section, { color: t.soft }]}>7-Day Forecast</Text>
+          <WeeklyForecast days={data.weekly} />
 
           <Text style={[type.labelSm, styles.section, { color: t.soft }]}>Sun path</Text>
           <GlassCard level="1">
@@ -199,4 +253,11 @@ const styles = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
   metric: { width: '48%', marginBottom: 16 },
   toggleRow: { flexDirection: 'row', alignItems: 'center' },
+  stageBar: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
+  stageRow: { flexDirection: 'row', alignItems: 'center' },
+  stageChip: {
+    width: 30, height: 30, borderRadius: 15, borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center', marginHorizontal: 3,
+  },
+  resetChip: { marginLeft: 10 },
 });

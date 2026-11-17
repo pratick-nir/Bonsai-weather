@@ -123,6 +123,22 @@ leafGeo.setIndex([0,1,3,0,3,2]); leafGeo.computeVertexNormals();
 var leafMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:.7,side:THREE.DoubleSide});
 
 var tree,group;
+var curGrowth=-1, frozenTs=null;
+window.resetTree=function(){tm=0;prevTs=-1;sentDone=false;frozenTs=null;};
+window.setTreeStage=function(day){frozenTs=clamp((day+1)/7,0,1)*REF;updateTubes(frozenTs);};
+window.clearTreeStage=function(){frozenTs=null;};
+function applyGrowth(g){
+  g=clamp(g,0,1);
+  if(Math.abs(g-curGrowth)<0.04)return;
+  curGrowth=g;
+  P.height=2.0+g*1.3;           // 2.0 (bare) → 3.3 (full lush)
+  P.branchDensity=0.45+g*0.55;  // 3 sparse branches → 7 full
+  P.foliageDensity=0.3+g*0.7;   // sparse leaves → dense canopy
+  P.trunkRadius=0.12+g*0.10;    // thin sapling → thick trunk
+  if(group){scene.remove(group);group=null}
+  tm=0;prevTs=-1;sentDone=false;
+  build();
+}
 function build(){
   tree=generateTree(P); group=new THREE.Group(); group.position.y=.46; scene.add(group);
   tree.tubes.forEach(function(tb){
@@ -202,6 +218,7 @@ window.setClimate=function(c){
   if(t>=28)tint.lerp(new THREE.Color(1,.82,.5),clamp((t-28)/12,0,1));       // heat: dry, yellowing leaves
   else if(t<=6)tint.lerp(new THREE.Color(.8,.92,1.05),clamp((6-t)/16,0,1)); // cold: bluish, muted leaves
   tgt.tint.copy(tint);
+  if(c.growth!==undefined)applyGrowth(c.growth);
 };
 function applyClimate(dt){
   var k=1-Math.exp(-dt*2.5);
@@ -236,15 +253,16 @@ function stepPrecip(dt,tm){
 }
 
 /* ---------- PART 4: main loop ---------- */
-fit(); build(); window.addEventListener('resize',fit);
+fit(); window.addEventListener('resize',fit);
+var last=performance.now(),tm=0,prevTs=-1,sentDone=false;
+applyGrowth(0.75);
 window.setClimate({condition:'clear',temp:20,wind:8,mood:'day'});
 Object.keys(tgt).forEach(function(k){var v=tgt[k];if(v&&v.isVector3)cur[k].copy(v);else if(v&&v.isColor)cur[k].copy(v);else cur[k]=v});
-var last=performance.now(),tm=0,prevTs=-1,sentDone=false;
 post({type:'ready'});
 function loop(now){
   requestAnimationFrame(loop);
   var dt=Math.min(.1,Math.max(0,(now-last)/1000)); last=now; tm+=dt;
-  var ts=clamp(tm/P.duration,0,1)*REF;
+  var ts=frozenTs!==null?frozenTs:clamp(tm/P.duration,0,1)*REF;
   if(ts!==prevTs){updateTubes(ts);prevTs=ts}
   updateLeaves(ts,tm); applyClimate(dt); stepPrecip(dt,tm);
   group.rotation.z=Math.sin(tm*1.3)*.006*cur.wind;
